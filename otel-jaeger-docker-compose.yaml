@@ -1,0 +1,78 @@
+# docker compose -f otel-jaeger-docker-compose.yaml up -d
+
+version: '3'
+
+services:
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.15.1
+    environment:
+      - discovery.type=single-node
+    ports:
+      - "9200:9200"
+    volumes:
+      - ./elasticsearch-data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl --silent --fail localhost:9200/_cluster/health || exit 1"]
+      interval: 30s
+      timeout: 30s
+      retries: 3
+  jaeger-collector:
+    image: jaegertracing/jaeger-collector:latest
+    ports:
+      # host:container
+      - "14317:4317" # accept OpenTelemetry Protocol (OTLP) over gRPC (Protobuf)
+      - "14318:4318" # accept OpenTelemetry Protocol (OTLP) over HTTP (Protobuf and JSON)
+      - "14268:14268" # Accepts spans in jaeger.thrift  format with binary thrift protocol over HTTP (POST).
+      - "14269:14269" # Admin port: health check over HTTP (GET)
+      # - "9411:9411" # Accepts Zipkin spans in Thrift over HTTP, JSON and Proto (disabled by default)
+      # - "14250:14250" # Used by jaeger-agent to send spans in model.proto  Protobuf format over gRPC
+    environment:
+      SPAN_STORAGE_TYPE: elasticsearch
+      ES_SERVER_URLS: http://elasticsearch:9200
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+        restart: true
+
+  jaeger-query:
+    image: jaegertracing/jaeger-query:latest
+    ports:
+      # - "16685:16685" # Protobuf/gRPC QueryService 
+      - "16686:16686" # UI/API
+      # - "16687:16687" # admin port (health check,metrics)
+    environment:
+      SPAN_STORAGE_TYPE: elasticsearch
+      ES_SERVER_URLS: http://elasticsearch:9200
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+        restart: true
+
+  otel-collector:
+    image: otel/opentelemetry-collector:latest
+    ports:
+      # - 1888:1888 # pprof extension
+      # - 8888:8888 # Prometheus metrics exposed by the Collector
+      # - 8889:8889 # Prometheus exporter metrics
+      # - 13133:13133 # health_check extension
+      - 4317:4317 # OTLP gRPC receiver
+      # - 4318:4318 # OTLP http receiver
+      # - 55679:55679 # zpages extension
+    volumes:
+      # - ./otel-config.yaml:/etc/otel/config.yaml
+      - ./otel-config.yaml:/etc/otelcol/config.yaml
+    environment:
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://localhost:14317
+      OTEL_EXPORTER_OTLP_TRACES_PROTOCOL: grpc
+    depends_on:
+      - jaeger-collector
+
+  # sample-app:
+  #   build: .
+  #   ports:
+  #     - "5000:5000"
+  #   depends_on:
+  #     - otel-collector
+
+volumes:
+  jaeger-data:
